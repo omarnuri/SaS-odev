@@ -115,18 +115,42 @@ print("SaS Ödev-2: Frekans Uzayında Görüntü Filtreleme")
 print("Öğrenci: Omar Nuriyev | ID: 24011902")
 print("=" * 60)
 
-img_path = "assignment/noisy_image.png"
-clean_path = "assignment/image.png"
+def find_image(filename):
+    """noisy_image.png ve image.png dosyalarını birden fazla konumda ara."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        filename,                              # mevcut çalışma dizini
+        os.path.join("assignment", filename),  # assignment/ alt klasörü
+        os.path.join(here, filename),          # script ile aynı klasör
+        os.path.join(here, "assignment", filename),
+    ]
+    for p in candidates:
+        if os.path.exists(p):
+            return p
+    raise FileNotFoundError(
+        f"'{filename}' dosyası bulunamadı. Aranan konumlar:\n  - " +
+        "\n  - ".join(candidates)
+    )
+
+img_path = find_image("noisy_image.png")
+print(f"Girdi görüntüsü     : {img_path}")
 
 noisy_pil = Image.open(img_path)
 if noisy_pil.mode != 'L':
     noisy_pil = noisy_pil.convert('L')
 noisy = np.array(noisy_pil, dtype=float)
 
-clean_pil = Image.open(clean_path)
-if clean_pil.mode != 'L':
-    clean_pil = clean_pil.convert('L')
-clean_ref = np.array(clean_pil, dtype=float)
+# Referans temiz görüntü opsiyoneldir (PSNR/SSIM hesabı için kullanılır)
+clean_ref = None
+try:
+    clean_path = find_image("image.png")
+    clean_pil = Image.open(clean_path)
+    if clean_pil.mode != 'L':
+        clean_pil = clean_pil.convert('L')
+    clean_ref = np.array(clean_pil, dtype=float)
+    print(f"Referans görüntü    : {clean_path}")
+except FileNotFoundError:
+    print("Referans temiz görüntü bulunamadı — PSNR/SSIM metrikleri atlanacak.")
 
 rows, cols = noisy.shape
 print(f"\nGörüntü boyutu       : {cols}x{rows} piksel (Genişlik x Yükseklik)")
@@ -292,27 +316,30 @@ G_log = np.log1p(np.abs(G))
 G_unshifted = np.fft.ifftshift(G)
 cleaned_raw = np.real(np.fft.ifft2(G_unshifted))
 
-# Normalize et [0, 255]
-cleaned = np.clip(cleaned_raw, 0, None)
-cleaned = (cleaned / cleaned.max() * 255).astype(np.uint8)
+# Doğru normalize: gerçek piksel aralığına kırp (yeniden ölçekleme YAPMA;
+# aksi halde resmin ortalama parlaklığı değişir ve PSNR yapay olarak düşer).
+cleaned = np.clip(np.round(cleaned_raw), 0, 255).astype(np.uint8)
 cleaned_f = cleaned.astype(float)
 
 print(f"Filtrelenmiş spektrum: [0, {G_log.max():.3f}] (log)")
 print(f"Temizlenmiş görüntü  : [{cleaned.min()}, {cleaned.max()}] piksel değer aralığı")
 
-# Kalite metrikleri
-psnr_noisy_clean = psnr(noisy, clean_ref)
-psnr_cleaned_clean = psnr(cleaned_f, clean_ref)
-psnr_improvement = psnr_cleaned_clean - psnr_noisy_clean
-ssim_noisy = ssim(noisy, clean_ref)
-ssim_cleaned = ssim(cleaned_f, clean_ref)
+# Kalite metrikleri (yalnızca referans temiz görüntü mevcutsa)
+psnr_noisy_clean = psnr_cleaned_clean = psnr_improvement = None
+ssim_noisy = ssim_cleaned = None
+if clean_ref is not None:
+    psnr_noisy_clean = psnr(noisy, clean_ref)
+    psnr_cleaned_clean = psnr(cleaned_f, clean_ref)
+    psnr_improvement = psnr_cleaned_clean - psnr_noisy_clean
+    ssim_noisy = ssim(noisy, clean_ref)
+    ssim_cleaned = ssim(cleaned_f, clean_ref)
 
-print(f"\nKalite Metrikleri:")
-print(f"  PSNR (gürültülü vs referans) : {psnr_noisy_clean:.2f} dB")
-print(f"  PSNR (temizlenmiş vs referans): {psnr_cleaned_clean:.2f} dB")
-print(f"  PSNR iyileştirmesi           : +{psnr_improvement:.2f} dB")
-print(f"  SSIM (gürültülü vs referans) : {ssim_noisy:.4f}")
-print(f"  SSIM (temizlenmiş vs referans): {ssim_cleaned:.4f}")
+    print(f"\nKalite Metrikleri:")
+    print(f"  PSNR (gürültülü vs referans) : {psnr_noisy_clean:.2f} dB")
+    print(f"  PSNR (temizlenmiş vs referans): {psnr_cleaned_clean:.2f} dB")
+    print(f"  PSNR iyileştirmesi           : +{psnr_improvement:.2f} dB")
+    print(f"  SSIM (gürültülü vs referans) : {ssim_noisy:.4f}")
+    print(f"  SSIM (temizlenmiş vs referans): {ssim_cleaned:.4f}")
 
 # Şekil 6: Filtrelenmiş spektrum
 fig6, ax6 = plt.subplots(1, 1, figsize=(6, 6))
@@ -354,15 +381,23 @@ axes8[0, 2].set_title('(c) Filtre Maskesi H(u,v)', fontweight='bold')
 axes8[0, 2].axis('off')
 
 axes8[1, 0].imshow(cleaned, cmap='gray', vmin=0, vmax=255)
-axes8[1, 0].set_title(f'(d) Temizlenmiş Görüntü\nPSNR: {psnr_cleaned_clean:.1f} dB', fontweight='bold')
+cleaned_title = '(d) Temizlenmiş Görüntü'
+if psnr_cleaned_clean is not None:
+    cleaned_title += f'\nPSNR: {psnr_cleaned_clean:.1f} dB'
+axes8[1, 0].set_title(cleaned_title, fontweight='bold')
 axes8[1, 0].axis('off')
 
 axes8[1, 1].imshow(G_log, cmap='hot')
 axes8[1, 1].set_title('(e) Filtrelenmiş FFT Log-Spektrum', fontweight='bold')
 axes8[1, 1].axis('off')
 
-axes8[1, 2].imshow(clean_ref, cmap='gray', vmin=0, vmax=255)
-axes8[1, 2].set_title('(f) Referans Temiz Görüntü', fontweight='bold')
+if clean_ref is not None:
+    axes8[1, 2].imshow(clean_ref, cmap='gray', vmin=0, vmax=255)
+    axes8[1, 2].set_title('(f) Referans Temiz Görüntü', fontweight='bold')
+else:
+    axes8[1, 2].text(0.5, 0.5, '(referans yok)', ha='center', va='center',
+                     transform=axes8[1, 2].transAxes)
+    axes8[1, 2].set_title('(f) Referans Görüntü', fontweight='bold')
 axes8[1, 2].axis('off')
 
 fig8.suptitle('Frekans Uzayında Periyodik Gürültü Giderimi — Karşılaştırma\n'
@@ -385,8 +420,9 @@ print("=" * 60)
 print(f"Görüntü boyutu           : {cols}x{rows}")
 print(f"Tespit edilen tepe sayısı: {len(peaks)}")
 print(f"Filtre tipi              : Gaussian Notch (σ={FILTER_SIGMA})")
-print(f"PSNR iyileştirmesi       : +{psnr_improvement:.2f} dB")
-print(f"SSIM iyileştirmesi       : {ssim_noisy:.4f} → {ssim_cleaned:.4f}")
+if psnr_improvement is not None:
+    print(f"PSNR iyileştirmesi       : +{psnr_improvement:.2f} dB")
+    print(f"SSIM iyileştirmesi       : {ssim_noisy:.4f} → {ssim_cleaned:.4f}")
 print("=" * 60)
 print("\nTüm şekiller başarıyla kaydedildi!")
 print("Rapor oluşturmak için: python3 generate_report.py")
